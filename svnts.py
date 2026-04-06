@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 CTIME_PROP = "svnts:ctime"
 MTIME_PROP = "svnts:mtime"
-TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S"
+TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S %z"
 SVN_EXE = "svn"
 HOOKS_REG = r"Software\TortoiseSVN"
 
