@@ -100,16 +100,29 @@ def _parse_svn_hash(data):
     if pos >= len(blob) or blob[pos:pos + 1] != b"(":
         return {}
     pos += 1  # skip "("
-    while pos < len(blob) and blob[pos] != ord(")"):
-        if blob[pos] == ord(" "):
+    while pos < len(blob):
+        # skip spaces
+        while pos < len(blob) and blob[pos] == ord(" "):
             pos += 1
-            continue
-        # read key (until space)
-        sp = blob.index(b" ", pos)
-        key = blob[pos:sp].decode("utf-8")
-        pos = sp + 1
-        # peek next token: if it's a number followed by space, it's a length
-        sp = blob.index(b" ", pos)
+        if pos >= len(blob) or blob[pos] == ord(")"):
+            break
+        # read key (until space or ')')
+        sp = blob.find(b" ", pos)
+        if sp == -1:
+            sp = len(blob)
+        key_end = min(sp, blob.index(b")", pos) if b")" in blob[pos:] else sp)
+        key = blob[pos:key_end].decode("utf-8")
+        pos = key_end
+        # skip spaces before value/length
+        while pos < len(blob) and blob[pos] == ord(" "):
+            pos += 1
+        if pos >= len(blob) or blob[pos] == ord(")"):
+            props[key] = ""
+            break
+        # check if next token is a number (length field)
+        sp = blob.find(b" ", pos)
+        if sp == -1:
+            sp = blob.index(b")", pos) if b")" in blob[pos:] else len(blob)
         token = blob[pos:sp]
         try:
             vlen = int(token)
@@ -117,29 +130,33 @@ def _parse_svn_hash(data):
             # read exactly vlen bytes as value
             val = blob[pos:pos + vlen].decode("utf-8")
             pos += vlen
-        except (ValueError, UnicodeDecodeError):
-            # no length field; token is the start of the value
-            # value runs until next key (a non-space byte preceded by space
-            # where the next-next byte is ':' — i.e. a property name pattern)
-            # simpler: value runs until we see SP + something that looks like a key
-            val = token.decode("utf-8")
-            pos = sp + 1
-            while pos < len(blob) and blob[pos] != ord(")"):
-                # check if we're at the start of a new key
-                # a key starts with non-space and contains ':'
-                nsp = blob.find(b" ", pos)
+        except ValueError:
+            # no length field; read until next key or ')'
+            # a new key starts after a space and contains ':'
+            # value is everything from pos until ')' or next "SP key_with_colon"
+            end = pos
+            search_from = pos
+            while True:
+                # find next space
+                nsp = blob.find(b" ", search_from)
                 if nsp == -1:
-                    # rest until ')' is part of current value
-                    val += " " + blob[pos:blob.index(b")", pos)].decode("utf-8")
-                    pos = len(blob)
+                    end = blob.index(b")", pos)
                     break
-                candidate = blob[pos:nsp]
-                # if candidate contains ':', it's likely a new key
+                # check if token after space is a key (contains ':')
+                nsp2 = blob.find(b" ", nsp + 1)
+                if nsp2 == -1:
+                    nsp2 = blob.index(b")", nsp + 1) if b")" in blob[nsp + 1:] else len(blob)
+                candidate = blob[nsp + 1:nsp2]
                 if b":" in candidate:
+                    end = nsp
                     break
-                # otherwise it's part of current value
-                val += " " + candidate.decode("utf-8")
-                pos = nsp + 1
+                search_from = nsp + 1
+                # if we hit ')', value extends to ')'
+                if blob[nsp + 1:nsp + 2] == b")":
+                    end = nsp + 1
+                    break
+            val = blob[pos:end].decode("utf-8").strip()
+            pos = end
         props[key] = val
     return props
 
