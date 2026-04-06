@@ -11,6 +11,7 @@ PRE_COMMIT_BAT = os.path.join(ROOT_DIR, "scripts", "hooks", "pre-commit-save.bat
 POST_UPDATE_BAT = os.path.join(ROOT_DIR, "scripts", "hooks", "post-update-restore.bat")
 
 REG_TORTOISE = r"Software\TortoiseSVN"
+HKCU_CLASSES = r"SOFTWARE\Classes"
 
 # Context menu entries: (key_path, display_name, command)
 MENU_ENTRIES = [
@@ -33,9 +34,9 @@ HOOK_TYPE_POST_UPDATE = "post_update_hook"
 
 
 def _reg_delete(key_path: str) -> None:
-    """Delete a registry key under HKCR, ignoring errors."""
+    """Delete a registry key under HKCU\\SOFTWARE\\Classes, ignoring errors."""
     try:
-        winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path)
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, HKCU_CLASSES + "\\" + key_path)
     except FileNotFoundError:
         pass
     except OSError:
@@ -43,14 +44,16 @@ def _reg_delete(key_path: str) -> None:
 
 
 def _reg_add_sz(key_path: str, value_name: str, value: str) -> None:
-    """Add a REG_SZ value under HKCR, creating keys as needed."""
-    parts = key_path.split("\\")
-    key = winreg.HKEY_CLASSES_ROOT
-    for part in parts[:-1]:
+    """Add a REG_SZ value under HKCU\\SOFTWARE\\Classes, creating keys as needed."""
+    full_path = HKCU_CLASSES + "\\" + key_path
+    parts = full_path.split("\\")
+    key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, parts[0])
+    for part in parts[1:-1]:
         key = winreg.CreateKey(key, part)
     sub = winreg.CreateKey(key, parts[-1])
     winreg.SetValueEx(sub, value_name, 0, winreg.REG_SZ, value)
     winreg.CloseKey(sub)
+    winreg.CloseKey(key)
 
 
 def install_menu():
