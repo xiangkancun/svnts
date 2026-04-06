@@ -3,7 +3,6 @@
 import ctypes
 import ctypes.wintypes
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -18,10 +17,11 @@ MTIME_PROP = "svnts:mtime"
 ISO8601_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 SVN_EXE = "svn"
 HOOKS_REG = r"Software\TortoiseSVN"
-HKCU_CLASSES = r"SOFTWARE\Classes"
 
 # Install dir: %USERPROFILE%\svnts\
 INSTALL_DIR = os.path.join(os.path.expanduser("~"), "svnts")
+SENDTO_DIR = os.path.join(
+    os.environ.get("APPDATA", ""), "Microsoft", "Windows", "SendTo")
 
 # ---------------------------------------------------------------------------
 # File time operations (Win32 API)
@@ -240,62 +240,8 @@ def cmd_hook_restore(args):
 
 
 # ---------------------------------------------------------------------------
-# Registry: context menu + TortoiseSVN hooks
+# TortoiseSVN hooks (registry)
 # ---------------------------------------------------------------------------
-def _reg_add(key_path, value_name, value):
-    full = HKCU_CLASSES + "\\" + key_path
-    if value_name == "command":
-        # "command" is a subkey whose default value is the command
-        full += "\\command"
-        value_name = None
-    parts = full.split("\\")
-    access = winreg.KEY_ALL_ACCESS | winreg.KEY_WOW64_64KEY
-    key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, parts[0], 0, access)
-    for p in parts[1:-1]:
-        key = winreg.CreateKeyEx(key, p, 0, access)
-    sub = winreg.CreateKeyEx(key, parts[-1], 0, access)
-    winreg.SetValueEx(sub, value_name, 0, winreg.REG_SZ, value)
-    winreg.CloseKey(sub)
-    winreg.CloseKey(key)
-
-
-def _reg_del(key_path):
-    """Delete a registry key and all its subkeys via RegDeleteTreeW."""
-    full = HKCU_CLASSES + "\\" + key_path
-    advapi32 = ctypes.windll.advapi32
-    advapi32.RegDeleteTreeW.argtypes = [
-        ctypes.wintypes.HKEY, ctypes.c_wchar_p]
-    advapi32.RegDeleteTreeW.restype = ctypes.c_long
-    ret = advapi32.RegDeleteTreeW(
-        ctypes.c_void_p(int(winreg.HKEY_CURRENT_USER)).value
-        if winreg.HKEY_CURRENT_USER > 0x7FFFFFFF
-        else winreg.HKEY_CURRENT_USER,
-        full)
-    if ret != 0 and ret != 2:  # 2 = ERROR_FILE_NOT_FOUND
-        try:
-            winreg.DeleteKeyEx(
-                winreg.HKEY_CURRENT_USER, full,
-                winreg.KEY_WOW64_64KEY | winreg.KEY_ALL_ACCESS, 0)
-        except (FileNotFoundError, OSError):
-            pass
-
-
-def _menu_items():
-    """Build context menu items using absolute paths for Explorer."""
-    exe = sys.executable
-    script = os.path.join(INSTALL_DIR, "svnts.py")
-    return [
-        (r"*\shell\SvnTimestampSave", "Save Timestamps to SVN",
-         f'"{exe}" "{script}" save "%1"'),
-        (r"*\shell\SvnTimestampRestore", "Restore Timestamps from SVN",
-         f'"{exe}" "{script}" restore "%1"'),
-        (r"Directory\shell\SvnTimestampSave", "Save Timestamps to SVN",
-         f'"{exe}" "{script}" save "%1"'),
-        (r"Directory\shell\SvnTimestampRestore", "Restore Timestamps from SVN",
-         f'"{exe}" "{script}" restore "%1"'),
-    ]
-
-
 def _make_hook_block(hook_type, path, command):
     return [hook_type, path, command, "true", "hide", "enforce"]
 
@@ -343,6 +289,41 @@ def _get_local_drives():
     return sorted(drives)
 
 
+# ---------------------------------------------------------------------------
+# SendTo shortcuts
+# ---------------------------------------------------------------------------
+def _sendto_items():
+    """Return (filename, bat_content) pairs for SendTo menu."""
+    exe = sys.executable
+    script = os.path.join(INSTALL_DIR, "svnts.py")
+    return [
+        ("Save Timestamps to SVN.bat",
+         f'@echo off\n"{exe}" "{script}" save "%~1"\npause\n'),
+        ("Restore Timestamps from SVN.bat",
+         f'@echo off\n"{exe}" "{script}" restore "%~1"\npause\n'),
+    ]
+
+
+def _install_sendto():
+    os.makedirs(SENDTO_DIR, exist_ok=True)
+    for name, content in _sendto_items():
+        path = os.path.join(SENDTO_DIR, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+
+def _uninstall_sendto():
+    for name, _ in _sendto_items():
+        path = os.path.join(SENDTO_DIR, name)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Install / Uninstall
+# ---------------------------------------------------------------------------
 def cmd_install(_args):
     """Copy files to %USERPROFILE%\\svnts and register everything."""
     hooks_dir = os.path.join(INSTALL_DIR, "hooks")
@@ -360,12 +341,9 @@ def cmd_install(_args):
     shutil.copy2(post_update_src, post_update_dst)
     print("       Done.")
 
-    # Context menu
-    print("[2/3] Registering context menu...")
-    for key_path, name, cmd in _menu_items():
-        _reg_add(key_path, None, name)
-        _reg_add(key_path, "command", cmd)
-        _reg_add(key_path, "Icon", "shell32.dll,43")
+    # SendTo menu
+    print("[2/3] Adding SendTo menu...")
+    _install_sendto()
     print("       Done.")
 
     # TortoiseSVN hooks
@@ -382,14 +360,14 @@ def cmd_install(_args):
     _write_hooks(blocks)
     print("       Done.")
     print(f"\nInstallation complete. Files in {INSTALL_DIR}")
+    print("Right-click any file -> Send to -> Save/Restore Timestamps")
     return 0
 
 
 def cmd_uninstall(_args):
-    """Remove registry entries and delete installed files."""
-    print("[1/3] Removing context menu...")
-    for key_path, _, _ in _menu_items():
-        _reg_del(key_path)
+    """Remove SendTo shortcuts, TortoiseSVN hooks, and installed files."""
+    print("[1/3] Removing SendTo menu...")
+    _uninstall_sendto()
     print("       Done.")
 
     print("[2/3] Removing TortoiseSVN hooks...")
