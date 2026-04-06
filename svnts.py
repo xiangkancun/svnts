@@ -4,10 +4,9 @@ import ctypes
 import ctypes.wintypes
 import os
 import shutil
-import subprocess
+import sqlite3
 import sys
 import winreg
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
@@ -16,7 +15,6 @@ from datetime import datetime, timezone
 CTIME_PROP = "svnts:ctime"
 MTIME_PROP = "svnts:mtime"
 TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S %z"
-SVN_EXE = "svn"
 HOOKS_REG = r"Software\TortoiseSVN"
 
 # Install dir: %USERPROFILE%\svnts\
@@ -84,59 +82,58 @@ def from_timestamp_str(s):
 
 
 # ---------------------------------------------------------------------------
-# SVN property operations
+# SVN property serialization format (SVN hash)
+# Format: "K <len>\n<key>\nV <len>\n<val>\n" ... "END\n"
 # ---------------------------------------------------------------------------
-def _svn_propget(path, prop):
-    try:
-        r = subprocess.run(
-            [SVN_EXE, "propget", prop, path],
-            capture_output=True, text=True, timeout=30,
-            encoding="utf-8", errors="replace")
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
-    except Exception:
-        pass
-    return None
+def _parse_svn_hash(data):
+    """Parse SVN property hash bytes -> dict."""
+    if not data:
+        return {}
+    props = {}
+    blob = data if isinstance(data, bytes) else data.encode("utf-8")
+    pos = 0
+    while pos < len(blob):
+        if blob[pos:pos + 2] == b"K ":
+            pos += 2
+            nl = blob.index(b"\n", pos)
+            klen = int(blob[pos:nl])
+            pos = nl + 1
+            key = blob[pos:pos + klen].decode("utf-8")
+            pos += klen + 1
+            if blob[pos:pos + 2] != b"V ":
+                break
+            pos += 2
+            nl = blob.index(b"\n", pos)
+            vlen = int(blob[pos:nl])
+            pos = nl + 1
+            val = blob[pos:pos + vlen].decode("utf-8")
+            pos += vlen + 1
+            props[key] = val
+        elif blob[pos:pos + 3] == b"END":
+            break
+        else:
+            pos += 1
+    return props
 
 
-def _svn_propget_batch(paths, prop, chunk_size=200):
-    """Batch propget: returns {path: value} for all paths.
-
-    svn propget PROP file1 file2 ... outputs:
-      path1 - value1
-      path2 - value2
-    """
-    result = {}
-    for i in range(0, len(paths), chunk_size):
-        chunk = paths[i:i + chunk_size]
-        try:
-            r = subprocess.run(
-                [SVN_EXE, "propget", prop] + chunk,
-                capture_output=True, text=True, timeout=120,
-                encoding="utf-8", errors="replace")
-            if r.returncode == 0:
-                for line in r.stdout.splitlines():
-                    line = line.strip()
-                    if " - " in line:
-                        fpath, _, val = line.partition(" - ")
-                        if val:
-                            result[fpath] = val
-        except Exception:
-            pass
-    return result
-
-
-def _svn_propset(path, prop, value):
-    r = subprocess.run(
-        [SVN_EXE, "propset", prop, value, path],
-        capture_output=True, text=True, timeout=30,
-        encoding="utf-8", errors="replace")
-    if r.returncode != 0:
-        raise OSError(f"svn propset failed: {r.stderr.strip()}")
+def _serialize_svn_hash(props):
+    """Serialize dict -> SVN property hash bytes."""
+    buf = bytearray()
+    for k, v in props.items():
+        kb = k.encode("utf-8")
+        vb = v.encode("utf-8")
+        buf.extend(f"K {len(kb)}\n".encode())
+        buf.extend(kb)
+        buf.extend(b"\n")
+        buf.extend(f"V {len(vb)}\n".encode())
+        buf.extend(vb)
+        buf.extend(b"\n")
+    buf.extend(b"END\n")
+    return bytes(buf)
 
 
 # ---------------------------------------------------------------------------
-# Working copy detection
+# SVN working copy detection + wc.db access
 # ---------------------------------------------------------------------------
 _wc_root_cache = {}
 
@@ -146,7 +143,6 @@ def find_wc_root(path):
     d = os.path.realpath(path)
     if os.path.isfile(d):
         d = os.path.dirname(d)
-    # Check cache: find longest cached prefix that matches
     best = None
     for cached_dir, cached_root in _wc_root_cache.items():
         if d.lower().startswith(cached_dir.lower()):
@@ -154,7 +150,6 @@ def find_wc_root(path):
                 best = (cached_dir, cached_root)
     if best:
         return best[1]
-    # Walk up to find .svn
     original = d
     while d:
         if os.path.isdir(os.path.join(d, ".svn")):
@@ -171,22 +166,150 @@ def is_in_wc(path):
     return find_wc_root(path) is not None
 
 
+def _wc_db_path(file_path):
+    """Return (db_path, wc_root) for a file, or (None, None)."""
+    wc_root = find_wc_root(file_path)
+    if not wc_root:
+        return None, None
+    db = os.path.join(wc_root, ".svn", "wc.db")
+    if os.path.isfile(db):
+        return db, wc_root
+    return None, None
+
+
+def _relpath(file_path, wc_root):
+    """Relative path from WC root, using forward slashes (SVN convention)."""
+    return os.path.relpath(file_path, wc_root).replace("\\", "/")
+
+
+# ---------------------------------------------------------------------------
+# SVN property read/write via wc.db (zero subprocess, zero Defender impact)
+# ---------------------------------------------------------------------------
+def _db_propget(file_path, prop_name):
+    """Read a single property from wc.db. Returns value or None."""
+    db_path, wc_root = _wc_db_path(file_path)
+    if not db_path:
+        return None
+    rp = _relpath(file_path, wc_root)
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        cur = conn.execute(
+            "SELECT properties FROM nodes "
+            "WHERE local_relpath = ? ORDER BY op_depth DESC LIMIT 1",
+            (rp,))
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0]:
+            return _parse_svn_hash(row[0]).get(prop_name)
+    except Exception:
+        pass
+    return None
+
+
+def _db_propset(file_path, prop_name, prop_value):
+    """Write a property to wc.db. Creates working layer if needed."""
+    db_path, wc_root = _wc_db_path(file_path)
+    if not db_path:
+        raise OSError("Not in SVN working copy")
+    rp = _relpath(file_path, wc_root)
+    conn = sqlite3.connect(db_path, timeout=5)
+
+    # Find existing working layer (op_depth > 0)
+    working = conn.execute(
+        "SELECT op_depth, properties FROM nodes "
+        "WHERE local_relpath = ? AND op_depth > 0 "
+        "ORDER BY op_depth DESC LIMIT 1",
+        (rp,)).fetchone()
+
+    if working:
+        op_depth, prop_blob = working
+        props = _parse_svn_hash(prop_blob) if prop_blob else {}
+        props[prop_name] = prop_value
+        conn.execute(
+            "UPDATE nodes SET properties = ? "
+            "WHERE local_relpath = ? AND op_depth = ?",
+            (_serialize_svn_hash(props), rp, op_depth))
+    else:
+        # No working layer — copy base row to op_depth=1 with modified props
+        base = conn.execute(
+            "SELECT properties FROM nodes "
+            "WHERE local_relpath = ? AND op_depth = 0",
+            (rp,)).fetchone()
+        if not base:
+            conn.close()
+            raise OSError(f"Not in WC DB: {rp}")
+        props = _parse_svn_hash(base[0]) if base[0] else {}
+        props[prop_name] = prop_value
+        conn.execute(
+            "INSERT INTO nodes "
+            "(wc_id, local_relpath, parent_relpath, name, kind, "
+            "presence, checksum, op_depth, properties) "
+            "SELECT wc_id, local_relpath, parent_relpath, name, kind, "
+            "presence, checksum, 1, ? "
+            "FROM nodes WHERE local_relpath = ? AND op_depth = 0",
+            (_serialize_svn_hash(props), rp))
+
+    conn.commit()
+    conn.close()
+
+
+def _db_propget_batch(file_paths, prop_name):
+    """Batch read a property for multiple files. Returns {path: value}.
+
+    Groups files by WC root, one SQL query per WC.
+    """
+    result = {}
+    by_wc = {}
+    for fp in file_paths:
+        db_path, wc_root = _wc_db_path(fp)
+        if not db_path:
+            continue
+        rp = _relpath(fp, wc_root)
+        by_wc.setdefault((db_path, wc_root), []).append((rp, fp))
+
+    for (db_path, wc_root), entries in by_wc.items():
+        relpaths = [e[0] for e in entries]
+        rp_map = {e[0]: e[1] for e in entries}
+        placeholders = ",".join("?" * len(relpaths))
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            cur = conn.execute(
+                f"SELECT local_relpath, properties FROM nodes "
+                f"WHERE local_relpath IN ({placeholders}) "
+                f"ORDER BY local_relpath, op_depth DESC",
+                relpaths)
+            seen = set()
+            for row in cur.fetchall():
+                rp, prop_blob = row
+                if rp in seen:
+                    continue
+                seen.add(rp)
+                if prop_blob:
+                    val = _parse_svn_hash(prop_blob).get(prop_name)
+                    if val:
+                        result[rp_map[rp]] = val
+            conn.close()
+        except Exception:
+            pass
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Save / Restore
 # ---------------------------------------------------------------------------
-def save_timestamps(path, log=None):
-    """Save file ctime/mtime as SVN properties."""
+def save_timestamps(path):
+    """Save file ctime/mtime as SVN properties via wc.db."""
     if not os.path.isfile(path):
-        return False, "File does not exist"
+        return False
     if not is_in_wc(path):
-        return False, "Not in SVN working copy"
+        return False
     try:
         ct, mt = get_file_times(path)
-        _svn_propset(path, CTIME_PROP, to_timestamp_str(ct))
-        _svn_propset(path, MTIME_PROP, to_timestamp_str(mt))
-        return True, None
-    except Exception as e:
-        return False, str(e)
+        _db_propset(path, CTIME_PROP, to_timestamp_str(ct))
+        _db_propset(path, MTIME_PROP, to_timestamp_str(mt))
+        return True
+    except Exception:
+        return False
 
 
 def _restore_file(path, ct_s, mt_s):
@@ -226,37 +349,33 @@ def _progress_bar(current, total, width=30):
     print(f"\r  [{bar}] {current}/{total}", end="", flush=True)
 
 
-def process_paths(paths, save, log=None, workers=4):
+def process_paths(paths, save, log=None):
     """Process files/directories. Returns (ok, fail).
 
-    Save: parallel svn propset per file.
-    Restore: batch svn propget (2 calls total), then set_file_times.
+    All operations go through wc.db (SQLite) — zero subprocess, zero Defender.
     """
     files = _collect_files(paths)
     if not files:
         return 0, 0
-    # Filter out non-WC files early
     files = [f for f in files if is_in_wc(f)]
     if not files:
         return 0, 0
     total = len(files)
 
     if save:
-        ok = fail = done = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(save_timestamps, f): f for f in files}
-            for future in as_completed(futures):
-                s, _ = future.result()
-                done += 1
-                ok += s
-                fail += not s
-                if log:
-                    _progress_bar(done, total)
+        ok = fail = 0
+        for i, f in enumerate(files):
+            if save_timestamps(f):
+                ok += 1
+            else:
+                fail += 1
+            if log:
+                _progress_bar(i + 1, total)
     else:
         if log:
             print("  Reading properties...", flush=True)
-        ct_map = _svn_propget_batch(files, CTIME_PROP)
-        mt_map = _svn_propget_batch(files, MTIME_PROP)
+        ct_map = _db_propget_batch(files, CTIME_PROP)
+        mt_map = _db_propget_batch(files, MTIME_PROP)
         ok = fail = skip = 0
         for i, f in enumerate(files):
             s = _restore_file(f, ct_map.get(f), mt_map.get(f))
@@ -465,8 +584,6 @@ def cmd_install(_args):
     _write_hooks(blocks)
     print("       Done.")
     print(f"\nInstallation complete. Files in {INSTALL_DIR}")
-    print(f"\nTip: add Defender exclusion for better performance on large dirs:")
-    print(f"  Add-MpPreference -ExclusionPath \"{INSTALL_DIR}\"")
     return 0
 
 
