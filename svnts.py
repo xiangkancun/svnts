@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import winreg
@@ -18,6 +19,9 @@ ISO8601_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 SVN_EXE = "svn"
 HOOKS_REG = r"Software\TortoiseSVN"
 HKCU_CLASSES = r"SOFTWARE\Classes"
+
+# Install dir: %USERPROFILE%\svnts\
+INSTALL_DIR = os.path.join(os.path.expanduser("~"), "svnts")
 
 # ---------------------------------------------------------------------------
 # File time operations (Win32 API)
@@ -240,6 +244,10 @@ def cmd_hook_restore(args):
 # ---------------------------------------------------------------------------
 def _reg_add(key_path, value_name, value):
     full = HKCU_CLASSES + "\\" + key_path
+    if value_name == "command":
+        # "command" is a subkey whose default value is the command
+        full += "\\command"
+        value_name = None
     parts = full.split("\\")
     key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, parts[0])
     for p in parts[1:-1]:
@@ -251,23 +259,40 @@ def _reg_add(key_path, value_name, value):
 
 
 def _reg_del(key_path):
-    try:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER,
-                         HKCU_CLASSES + "\\" + key_path)
-    except (FileNotFoundError, OSError):
-        pass
+    """Delete a registry key and all its subkeys via RegDeleteTreeW."""
+    full = HKCU_CLASSES + "\\" + key_path
+    advapi32 = ctypes.windll.advapi32
+    advapi32.RegDeleteTreeW.argtypes = [
+        ctypes.wintypes.HKEY, ctypes.c_wchar_p]
+    advapi32.RegDeleteTreeW.restype = ctypes.c_long
+    ret = advapi32.RegDeleteTreeW(
+        ctypes.c_void_p(int(winreg.HKEY_CURRENT_USER)).value
+        if winreg.HKEY_CURRENT_USER > 0x7FFFFFFF
+        else winreg.HKEY_CURRENT_USER,
+        full)
+    if ret != 0 and ret != 2:  # 2 = ERROR_FILE_NOT_FOUND
+        try:
+            winreg.DeleteKeyEx(
+                winreg.HKEY_CURRENT_USER, full,
+                winreg.KEY_WOW64_64KEY | winreg.KEY_ALL_ACCESS, 0)
+        except (FileNotFoundError, OSError):
+            pass
 
 
-MENU_ITEMS = [
-    (r"*\shell\SvnTimestampSave", "Save Timestamps to SVN",
-     f'python "{__file__}" save "%1"'),
-    (r"*\shell\SvnTimestampRestore", "Restore Timestamps from SVN",
-     f'python "{__file__}" restore "%1"'),
-    (r"Directory\shell\SvnTimestampSave", "Save Timestamps to SVN",
-     f'python "{__file__}" save "%1"'),
-    (r"Directory\shell\SvnTimestampRestore", "Restore Timestamps from SVN",
-     f'python "{__file__}" restore "%1"'),
-]
+def _menu_items():
+    """Build context menu items using absolute paths for Explorer."""
+    exe = sys.executable
+    script = os.path.join(INSTALL_DIR, "svnts.py")
+    return [
+        (r"*\shell\SvnTimestampSave", "Save Timestamps to SVN",
+         f'"{exe}" "{script}" save "%1"'),
+        (r"*\shell\SvnTimestampRestore", "Restore Timestamps from SVN",
+         f'"{exe}" "{script}" restore "%1"'),
+        (r"Directory\shell\SvnTimestampSave", "Save Timestamps to SVN",
+         f'"{exe}" "{script}" save "%1"'),
+        (r"Directory\shell\SvnTimestampRestore", "Restore Timestamps from SVN",
+         f'"{exe}" "{script}" restore "%1"'),
+    ]
 
 
 def _make_hook_block(hook_type, path, command):
@@ -304,8 +329,7 @@ def _write_hooks(blocks):
 
 
 def _is_our_hook(block):
-    marker = os.path.basename(__file__)
-    return any(marker in l.lower() for l in block)
+    return INSTALL_DIR.replace("\\", "\\\\").lower() in " ".join(block).lower()
 
 
 def _get_local_drives():
@@ -319,47 +343,63 @@ def _get_local_drives():
 
 
 def cmd_install(_args):
-    """Register context menu + TortoiseSVN hooks for all drives."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    pre_commit = os.path.join(script_dir, "scripts", "hooks", "pre-commit-save.bat")
-    post_update = os.path.join(script_dir, "scripts", "hooks", "post-update-restore.bat")
+    """Copy files to %USERPROFILE%\\svnts and register everything."""
+    hooks_dir = os.path.join(INSTALL_DIR, "hooks")
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    pre_commit_src = os.path.join(src_dir, "scripts", "hooks", "pre-commit-save.bat")
+    post_update_src = os.path.join(src_dir, "scripts", "hooks", "post-update-restore.bat")
+    pre_commit_dst = os.path.join(hooks_dir, "pre-commit-save.bat")
+    post_update_dst = os.path.join(hooks_dir, "post-update-restore.bat")
+
+    # Copy files
+    print(f"[1/3] Copying files to {INSTALL_DIR}...")
+    os.makedirs(hooks_dir, exist_ok=True)
+    shutil.copy2(__file__, INSTALL_DIR)
+    shutil.copy2(pre_commit_src, pre_commit_dst)
+    shutil.copy2(post_update_src, post_update_dst)
+    print("       Done.")
 
     # Context menu
-    print("[1/2] Registering context menu...")
-    for key_path, name, cmd in MENU_ITEMS:
+    print("[2/3] Registering context menu...")
+    for key_path, name, cmd in _menu_items():
         _reg_add(key_path, None, name)
         _reg_add(key_path, "command", cmd)
         _reg_add(key_path, "Icon", "shell32.dll,43")
     print("       Done.")
 
-    # TortoiseSVN hooks — one block per drive
-    print("[2/2] Registering TortoiseSVN hooks...")
+    # TortoiseSVN hooks
+    print("[3/3] Registering TortoiseSVN hooks...")
     blocks = _read_hooks()
     blocks = [b for b in blocks if not _is_our_hook(b)]
 
     drives = _get_local_drives()
     print(f"       Drives: {', '.join(drives)}")
     for drive in drives:
-        blocks.append(_make_hook_block("pre_commit_hook", drive, pre_commit))
-        blocks.append(_make_hook_block("post_update_hook", drive, post_update))
+        blocks.append(_make_hook_block("pre_commit_hook", drive, pre_commit_dst))
+        blocks.append(_make_hook_block("post_update_hook", drive, post_update_dst))
 
     _write_hooks(blocks)
     print("       Done.")
-    print("\nInstallation complete.")
+    print(f"\nInstallation complete. Files in {INSTALL_DIR}")
     return 0
 
 
 def cmd_uninstall(_args):
-    """Remove all context menu entries and TortoiseSVN hooks."""
-    print("[1/2] Removing context menu...")
-    for key_path, _, _ in MENU_ITEMS:
+    """Remove registry entries and delete installed files."""
+    print("[1/3] Removing context menu...")
+    for key_path, _, _ in _menu_items():
         _reg_del(key_path)
     print("       Done.")
 
-    print("[2/2] Removing TortoiseSVN hooks...")
+    print("[2/3] Removing TortoiseSVN hooks...")
     blocks = _read_hooks()
     blocks = [b for b in blocks if not _is_our_hook(b)]
     _write_hooks(blocks)
+    print("       Done.")
+
+    print(f"[3/3] Removing {INSTALL_DIR}...")
+    if os.path.isdir(INSTALL_DIR):
+        shutil.rmtree(INSTALL_DIR)
     print("       Done.")
     print("\nUninstallation complete.")
     return 0
