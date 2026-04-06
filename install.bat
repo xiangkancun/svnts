@@ -5,6 +5,8 @@ echo ============================================
 echo.
 
 set "ROOT_DIR=%~dp0"
+rem Remove trailing backslash
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 
 echo [1/3] Installing svnts Python package...
 pip install -e "%ROOT_DIR%"
