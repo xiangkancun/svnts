@@ -37,7 +37,7 @@ def _get_property(path: str, prop_name: str) -> str | None:
         result = subprocess.run(
             [SVN_EXE, "propget", prop_name, path],
             capture_output=True, text=True, timeout=30,
-            encoding="utf-8"
+            encoding="utf-8", errors="replace"
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
