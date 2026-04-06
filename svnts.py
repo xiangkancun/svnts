@@ -20,8 +20,6 @@ HOOKS_REG = r"Software\TortoiseSVN"
 
 # Install dir: %USERPROFILE%\svnts\
 INSTALL_DIR = os.path.join(os.path.expanduser("~"), "svnts")
-SENDTO_DIR = os.path.join(
-    os.environ.get("APPDATA", ""), "Microsoft", "Windows", "SendTo")
 
 # ---------------------------------------------------------------------------
 # File time operations (Win32 API)
@@ -290,34 +288,51 @@ def _get_local_drives():
 
 
 # ---------------------------------------------------------------------------
-# SendTo shortcuts
+# Context menu (registry)
 # ---------------------------------------------------------------------------
-def _sendto_items():
-    """Return (filename, bat_content) pairs for SendTo menu."""
-    exe = sys.executable
-    script = os.path.join(INSTALL_DIR, "svnts.py")
-    return [
-        ("Save Timestamps to SVN.bat",
-         f'@echo off\n"{exe}" "{script}" save "%~1"\npause\n'),
-        ("Restore Timestamps from SVN.bat",
-         f'@echo off\n"{exe}" "{script}" restore "%~1"\npause\n'),
-    ]
+_CONTEXT_PREFIXES = [
+    r"Software\Classes\*\shell",
+    r"Software\Classes\Directory\shell",
+    r"Software\Classes\Directory\Background\shell",
+]
 
 
-def _install_sendto():
-    os.makedirs(SENDTO_DIR, exist_ok=True)
-    for name, content in _sendto_items():
-        path = os.path.join(SENDTO_DIR, name)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
+def _add_context_menu(name, display_text, command, icon_path=None):
+    for prefix in _CONTEXT_PREFIXES:
+        key = winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, f"{prefix}\\{name}", 0, winreg.KEY_WRITE)
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, display_text)
+        if icon_path and os.path.isfile(icon_path):
+            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, f'"{icon_path}",0')
+        winreg.CloseKey(key)
+        cmd_key = winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER,
+            f"{prefix}\\{name}\\command", 0, winreg.KEY_WRITE)
+        winreg.SetValueEx(cmd_key, None, 0, winreg.REG_SZ, command)
+        winreg.CloseKey(cmd_key)
 
 
-def _uninstall_sendto():
-    for name, _ in _sendto_items():
-        path = os.path.join(SENDTO_DIR, name)
+def _del_context_menu(name):
+    for prefix in _CONTEXT_PREFIXES:
+        path = f"{prefix}\\{name}"
         try:
-            os.remove(path)
-        except FileNotFoundError:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, path,
+                winreg.KEY_ALL_ACCESS | winreg.KEY_WOW64_64KEY)
+            # Delete subkeys first
+            while True:
+                try:
+                    sub = winreg.EnumKey(key, 0)
+                    winreg.DeleteKey(
+                        winreg.HKEY_CURRENT_USER,
+                        f"{path}\\{sub}")
+                except OSError:
+                    break
+            winreg.CloseKey(key)
+            winreg.DeleteKeyEx(
+                winreg.HKEY_CURRENT_USER, path,
+                winreg.KEY_WOW64_64KEY, 0)
+        except (FileNotFoundError, OSError):
             pass
 
 
@@ -341,9 +356,17 @@ def cmd_install(_args):
     shutil.copy2(post_update_src, post_update_dst)
     print("       Done.")
 
-    # SendTo menu
-    print("[2/3] Adding SendTo menu...")
-    _install_sendto()
+    # Context menu
+    print("[2/3] Registering context menu...")
+    exe = sys.executable
+    script = os.path.join(INSTALL_DIR, "svnts.py")
+    tsvn_icon = r"C:\Program Files\TortoiseSVN\bin\TortoiseProc.exe"
+    _add_context_menu(
+        "SvnTimestampsSave", "SVN: 保存时间戳 (ctime/mtime)",
+        f'"{exe}" "{script}" save "%1"', tsvn_icon)
+    _add_context_menu(
+        "SvnTimestampsRestore", "SVN: 恢复时间戳 (ctime/mtime)",
+        f'"{exe}" "{script}" restore "%1"', tsvn_icon)
     print("       Done.")
 
     # TortoiseSVN hooks
@@ -360,14 +383,14 @@ def cmd_install(_args):
     _write_hooks(blocks)
     print("       Done.")
     print(f"\nInstallation complete. Files in {INSTALL_DIR}")
-    print("Right-click any file -> Send to -> Save/Restore Timestamps")
     return 0
 
 
 def cmd_uninstall(_args):
-    """Remove SendTo shortcuts, TortoiseSVN hooks, and installed files."""
-    print("[1/3] Removing SendTo menu...")
-    _uninstall_sendto()
+    """Remove context menu, TortoiseSVN hooks, and installed files."""
+    print("[1/3] Removing context menu...")
+    _del_context_menu("SvnTimestampsSave")
+    _del_context_menu("SvnTimestampsRestore")
     print("       Done.")
 
     print("[2/3] Removing TortoiseSVN hooks...")
