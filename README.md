@@ -17,7 +17,7 @@ SVN 不跟踪文件时间戳，checkout/update 后时间会被重置。本工具
 python svnts.py install
 ```
 
-或双击 `install.bat`。自动完成：复制文件 + 右键菜单 + TortoiseSVN Hooks。
+或双击 `install.bat`。自动完成：复制文件到 `%USERPROFILE%\svnts\` + 右键菜单 + TortoiseSVN Hooks。
 
 ## 卸载
 
@@ -37,6 +37,8 @@ python svnts.py restore <path>    # 恢复时间戳
 ## 技术细节
 
 - **属性存储**: 直接读写 `.svn/wc.db` (SQLite)，零子进程，零 Defender 影响
+- **属性格式**: SVN skel 格式 `(key [len] value ...)`，值含空格时带长度前缀
 - **时间格式**: `2026-04-06 23:19:58 +0800`（本地时间 + 时区偏移），跨机器一致
-- **属性序列化**: SVN hash 格式 (`K <len>\n<key>\nV <len>\n<val>\n...END\n`)
 - **工作层**: 修改属性时自动创建 working layer (op_depth>0)，svn status/commit 正常识别
+- **文件时间**: Win32 API (GetFileTime/SetFileTime)，FileShare.ReadWrite 避免锁定
+- **Hook 参数**: pre-commit 第 6 个参数为文件列表路径；post-update 第 5 个参数为工作副本路径

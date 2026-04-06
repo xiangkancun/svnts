@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 import sys
 import winreg
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -58,8 +58,7 @@ def _ft_to_dt(ft):
     """FILETIME -> UTC datetime."""
     v = ft.dwLowDateTime | (ft.dwHighDateTime << 32)
     us = (v - 116444736000000000) // 10
-    return datetime(1970, 1, 1, tzinfo=timezone.utc) + __import__(
-        "datetime").timedelta(microseconds=us)
+    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=us)
 
 
 def _dt_to_ft(dt):
