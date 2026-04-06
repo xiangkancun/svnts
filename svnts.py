@@ -376,7 +376,7 @@ def _collect_files(paths):
 def _progress_bar(current, total, width=30):
     pct = current / total if total else 0
     filled = int(width * pct)
-    bar = "\u2588" * filled + "\u2591" * (width - filled)
+    bar = "#" * filled + "-" * (width - filled)
     print(f"\r  [{bar}] {current}/{total}", end="", flush=True)
 
 
@@ -456,8 +456,10 @@ def cmd_restore(args):
 
 
 def cmd_hook_save(args):
-    # pre_commit_hook params: PATH DEPTH MESSAGEFILE ERROR MERGEPROPFILE RESULTPATH
-    # RESULTPATH is at args[5], contains list of files to be committed
+    # TortoiseSVN pre_commit_hook actual params (6 args from bat %1..%6):
+    #   args[0] = PATH, args[1] = DEPTH, args[2] = MESSAGEFILE,
+    #   args[3] = ERROR, args[4] = MERGEPROPFILE, args[5] = RESULTPATH
+    # RESULTPATH contains list of files to be committed
     if len(args) < 6:
         return 0
     result_file = args[5]
@@ -472,12 +474,16 @@ def cmd_hook_save(args):
 
 
 def cmd_hook_restore(args):
-    # post_update_hook params: PATH DEPTH REVISION ERROR MERGEPROPFILE
-    # No file list available — use PATH (args[0]) as working copy root,
-    # recursively restore all files that have timestamp properties.
-    if not args:
+    # TortoiseSVN post_update_hook actual params (6 args from bat %1..%5 + wc):
+    #   args[0] = temp file (PATH)
+    #   args[1] = depth (e.g. "-2")
+    #   args[2] = revision
+    #   args[3] = temp file (ERROR)
+    #   args[4] = working copy path
+    # The working copy root is at args[4].
+    if len(args) < 5:
         return 0
-    wc_path = args[0]
+    wc_path = args[4]
     if not wc_path or not os.path.isdir(wc_path):
         return 0
     ok, _ = process_paths([wc_path], False, log=print)
