@@ -329,7 +329,7 @@ def _write_hooks(blocks):
 
 
 def _is_our_hook(block):
-    return INSTALL_DIR.replace("\\", "\\\\").lower() in " ".join(block).lower()
+    return INSTALL_DIR.lower() in " ".join(block).lower()
 
 
 def _get_local_drives():
