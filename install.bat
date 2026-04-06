@@ -17,7 +17,7 @@ if %errorLevel% neq 0 (
 )
 
 echo [2/3] Installing context menu entries...
-python "%ROOT_DIR%svnts\_install.py" install-menu
+python "%ROOT_DIR%\svnts\_install.py" install-menu
 if %errorLevel% neq 0 (
     echo ERROR: context menu installation failed.
     pause
@@ -25,7 +25,7 @@ if %errorLevel% neq 0 (
 )
 
 echo [3/3] Configuring TortoiseSVN hooks...
-python "%ROOT_DIR%svnts\_install.py" install-hooks
+python "%ROOT_DIR%\svnts\_install.py" install-hooks
 if %errorLevel% neq 0 (
     echo ERROR: TortoiseSVN hook configuration failed.
     pause
