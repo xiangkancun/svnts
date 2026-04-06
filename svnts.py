@@ -99,6 +99,33 @@ def _svn_propget(path, prop):
     return None
 
 
+def _svn_propget_batch(paths, prop, chunk_size=200):
+    """Batch propget: returns {path: value} for all paths.
+
+    svn propget PROP file1 file2 ... outputs:
+      path1 - value1
+      path2 - value2
+    """
+    result = {}
+    for i in range(0, len(paths), chunk_size):
+        chunk = paths[i:i + chunk_size]
+        try:
+            r = subprocess.run(
+                [SVN_EXE, "propget", prop] + chunk,
+                capture_output=True, text=True, timeout=120,
+                encoding="utf-8", errors="replace")
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    line = line.strip()
+                    if " - " in line:
+                        fpath, _, val = line.partition(" - ")
+                        if val:
+                            result[fpath] = val
+        except Exception:
+            pass
+    return result
+
+
 def _svn_propset(path, prop, value):
     r = subprocess.run(
         [SVN_EXE, "propset", prop, value, path],
@@ -200,19 +227,54 @@ def _collect_files(paths):
     return files
 
 
-def process_paths(paths, save, log=None, workers=8):
-    """Process files/directories in parallel. Returns (ok, fail)."""
+def _restore_file(path, ct_s, mt_s, log=None):
+    """Restore a single file from already-fetched property values."""
+    if not ct_s and not mt_s:
+        return False
+    try:
+        ct = from_timestamp_str(ct_s) if ct_s else datetime.now(timezone.utc)
+        mt = from_timestamp_str(mt_s) if mt_s else datetime.now(timezone.utc)
+        set_file_times(path, ct, mt)
+        if log:
+            log(f"Restored: {path}")
+        return True
+    except Exception:
+        return False
+
+
+def process_paths(paths, save, log=None, workers=4):
+    """Process files/directories. Returns (ok, fail).
+
+    Save: parallel svn propset per file.
+    Restore: batch svn propget (2 calls total), then parallel set_file_times.
+    """
     files = _collect_files(paths)
     if not files:
         return 0, 0
-    fn = save_timestamps if save else restore_timestamps
-    ok = fail = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fn, f): f for f in files}
-        for future in as_completed(futures):
-            s, _ = future.result()
+    # Filter out non-WC files early
+    files = [f for f in files if is_in_wc(f)]
+    if not files:
+        return 0, 0
+
+    if save:
+        fn = save_timestamps
+        ok = fail = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(fn, f): f for f in files}
+            for future in as_completed(futures):
+                s, _ = future.result()
+                ok += s
+                fail += not s
+    else:
+        # Batch propget: only 2 svn calls regardless of file count
+        ct_map = _svn_propget_batch(files, CTIME_PROP)
+        mt_map = _svn_propget_batch(files, MTIME_PROP)
+        ok = fail = 0
+        for f in files:
+            s = _restore_file(f, ct_map.get(f), mt_map.get(f), log)
             ok += s
             fail += not s
+
     if log:
         action = "saved" if save else "restored"
         log(f"Done: {ok} {action}, {fail} failed.")
@@ -404,6 +466,8 @@ def cmd_install(_args):
     _write_hooks(blocks)
     print("       Done.")
     print(f"\nInstallation complete. Files in {INSTALL_DIR}")
+    print(f"\nTip: add Defender exclusion for better performance on large dirs:")
+    print(f"  Add-MpPreference -ExclusionPath \"{INSTALL_DIR}\"")
     return 0
 
 
