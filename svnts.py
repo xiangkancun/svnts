@@ -297,36 +297,23 @@ _CONTEXT_PREFIXES = [
 ]
 
 
-def _add_context_submenu(menu_name, display_text, icon_path, items):
-    """Register a cascading context menu with sub-commands.
-
-    items: list of (sub_name, sub_text, command, bg_command)
-    """
+def _add_context_menu(name, display_text, command, icon_path=None,
+                      bg_command=None):
+    """Register context menu. bg_command is used for Directory\\Background."""
     for prefix in _CONTEXT_PREFIXES:
         is_bg = "Background" in prefix
-        # Parent key: MUIVerb + Icon + SubCommands
+        cmd = bg_command if is_bg and bg_command else command
         key = winreg.CreateKeyEx(
-            winreg.HKEY_CURRENT_USER, f"{prefix}\\{menu_name}", 0, winreg.KEY_WRITE)
-        winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, display_text)
+            winreg.HKEY_CURRENT_USER, f"{prefix}\\{name}", 0, winreg.KEY_WRITE)
+        winreg.SetValueEx(key, None, 0, winreg.REG_SZ, display_text)
         if icon_path and os.path.isfile(icon_path):
             winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, f'"{icon_path}",0')
-        # SubCommands: semicolon-separated list
-        sub_names = ";".join(name for name, _, _, _ in items)
-        winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, sub_names)
         winreg.CloseKey(key)
-        # Each sub-command under shell\<menu>\shell\<sub_name>\command
-        for sub_name, sub_text, command, bg_command in items:
-            cmd = bg_command if is_bg and bg_command else command
-            sk = winreg.CreateKeyEx(
-                winreg.HKEY_CURRENT_USER,
-                f"{prefix}\\{menu_name}\\shell\\{sub_name}", 0, winreg.KEY_WRITE)
-            winreg.SetValueEx(sk, None, 0, winreg.REG_SZ, sub_text)
-            winreg.CloseKey(sk)
-            ck = winreg.CreateKeyEx(
-                winreg.HKEY_CURRENT_USER,
-                f"{prefix}\\{menu_name}\\shell\\{sub_name}\\command", 0, winreg.KEY_WRITE)
-            winreg.SetValueEx(ck, None, 0, winreg.REG_SZ, cmd)
-            winreg.CloseKey(ck)
+        cmd_key = winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER,
+            f"{prefix}\\{name}\\command", 0, winreg.KEY_WRITE)
+        winreg.SetValueEx(cmd_key, None, 0, winreg.REG_SZ, cmd)
+        winreg.CloseKey(cmd_key)
 
 
 def _del_context_menu(name):
@@ -358,21 +345,19 @@ def cmd_install(_args):
     shutil.copy2(post_update_src, post_update_dst)
     print("       Done.")
 
-    # Context menu (cascading submenu)
+    # Context menu
     print("[2/3] Registering context menu...")
     exe = sys.executable
     script = os.path.join(INSTALL_DIR, "svnts.py")
     tsvn_icon = r"C:\Program Files\TortoiseSVN\bin\TortoiseProc.exe"
-    _add_context_submenu(
-        "SvnTimestamps", "SVN 时间戳", tsvn_icon,
-        [
-            ("save", "保存时间戳 (ctime/mtime)",
-             f'"{exe}" "{script}" save "%1"',
-             f'"{exe}" "{script}" save "%V"'),
-            ("restore", "恢复时间戳 (ctime/mtime)",
-             f'"{exe}" "{script}" restore "%1"',
-             f'"{exe}" "{script}" restore "%V"'),
-        ])
+    _add_context_menu(
+        "SvnTimestampsSave", "SVN: 保存时间戳 (ctime/mtime)",
+        f'"{exe}" "{script}" save "%1"', tsvn_icon,
+        bg_command=f'"{exe}" "{script}" save "%V"')
+    _add_context_menu(
+        "SvnTimestampsRestore", "SVN: 恢复时间戳 (ctime/mtime)",
+        f'"{exe}" "{script}" restore "%1"', tsvn_icon,
+        bg_command=f'"{exe}" "{script}" restore "%V"')
     print("       Done.")
 
     # TortoiseSVN hooks
@@ -395,7 +380,8 @@ def cmd_install(_args):
 def cmd_uninstall(_args):
     """Remove context menu, TortoiseSVN hooks, and installed files."""
     print("[1/3] Removing context menu...")
-    _del_context_menu("SvnTimestamps")
+    _del_context_menu("SvnTimestampsSave")
+    _del_context_menu("SvnTimestampsRestore")
     print("       Done.")
 
     print("[2/3] Removing TortoiseSVN hooks...")
