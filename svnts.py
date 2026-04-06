@@ -82,53 +82,84 @@ def from_timestamp_str(s):
 
 
 # ---------------------------------------------------------------------------
-# SVN property serialization format (SVN hash)
-# Format: "K <len>\n<key>\nV <len>\n<val>\n" ... "END\n"
+# SVN property serialization format (skel format)
+# Format: "(key1 len1 val1 key2 len2 val2 ...)"
 # ---------------------------------------------------------------------------
 def _parse_svn_hash(data):
-    """Parse SVN property hash bytes -> dict."""
+    """Parse SVN skel-format property bytes -> dict.
+
+    Format: (key SP [length SP] value key SP [length SP] value ...)
+    If the value contains spaces, a length field precedes it.
+    If the value has no spaces, it appears directly after the key's space.
+    """
     if not data:
         return {}
     props = {}
     blob = data if isinstance(data, bytes) else data.encode("utf-8")
     pos = 0
-    while pos < len(blob):
-        if blob[pos:pos + 2] == b"K ":
-            pos += 2
-            nl = blob.index(b"\n", pos)
-            klen = int(blob[pos:nl])
-            pos = nl + 1
-            key = blob[pos:pos + klen].decode("utf-8")
-            pos += klen + 1
-            if blob[pos:pos + 2] != b"V ":
-                break
-            pos += 2
-            nl = blob.index(b"\n", pos)
-            vlen = int(blob[pos:nl])
-            pos = nl + 1
-            val = blob[pos:pos + vlen].decode("utf-8")
-            pos += vlen + 1
-            props[key] = val
-        elif blob[pos:pos + 3] == b"END":
-            break
-        else:
+    if pos >= len(blob) or blob[pos:pos + 1] != b"(":
+        return {}
+    pos += 1  # skip "("
+    while pos < len(blob) and blob[pos] != ord(")"):
+        if blob[pos] == ord(" "):
             pos += 1
+            continue
+        # read key (until space)
+        sp = blob.index(b" ", pos)
+        key = blob[pos:sp].decode("utf-8")
+        pos = sp + 1
+        # peek next token: if it's a number followed by space, it's a length
+        sp = blob.index(b" ", pos)
+        token = blob[pos:sp]
+        try:
+            vlen = int(token)
+            pos = sp + 1
+            # read exactly vlen bytes as value
+            val = blob[pos:pos + vlen].decode("utf-8")
+            pos += vlen
+        except (ValueError, UnicodeDecodeError):
+            # no length field; token is the start of the value
+            # value runs until next key (a non-space byte preceded by space
+            # where the next-next byte is ':' — i.e. a property name pattern)
+            # simpler: value runs until we see SP + something that looks like a key
+            val = token.decode("utf-8")
+            pos = sp + 1
+            while pos < len(blob) and blob[pos] != ord(")"):
+                # check if we're at the start of a new key
+                # a key starts with non-space and contains ':'
+                nsp = blob.find(b" ", pos)
+                if nsp == -1:
+                    # rest until ')' is part of current value
+                    val += " " + blob[pos:blob.index(b")", pos)].decode("utf-8")
+                    pos = len(blob)
+                    break
+                candidate = blob[pos:nsp]
+                # if candidate contains ':', it's likely a new key
+                if b":" in candidate:
+                    break
+                # otherwise it's part of current value
+                val += " " + candidate.decode("utf-8")
+                pos = nsp + 1
+        props[key] = val
     return props
 
 
 def _serialize_svn_hash(props):
-    """Serialize dict -> SVN property hash bytes."""
-    buf = bytearray()
+    """Serialize dict -> SVN skel-format property bytes.
+
+    If value contains spaces, prepend length field. Otherwise omit it.
+    """
+    buf = bytearray(b"(")
     for k, v in props.items():
         kb = k.encode("utf-8")
         vb = v.encode("utf-8")
-        buf.extend(f"K {len(kb)}\n".encode())
         buf.extend(kb)
-        buf.extend(b"\n")
-        buf.extend(f"V {len(vb)}\n".encode())
+        buf.extend(b" ")
+        if b" " in vb:
+            buf.extend(f"{len(vb)} ".encode())
         buf.extend(vb)
-        buf.extend(b"\n")
-    buf.extend(b"END\n")
+        buf.extend(b" ")
+    buf.extend(b")")
     return bytes(buf)
 
 
