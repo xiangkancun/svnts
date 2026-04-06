@@ -313,27 +313,12 @@ def _add_context_menu(name, display_text, command, icon_path=None):
 
 
 def _del_context_menu(name):
+    advapi32 = ctypes.windll.advapi32
+    advapi32.RegDeleteTreeW.argtypes = [ctypes.wintypes.HKEY, ctypes.c_wchar_p]
+    advapi32.RegDeleteTreeW.restype = ctypes.c_long
     for prefix in _CONTEXT_PREFIXES:
         path = f"{prefix}\\{name}"
-        try:
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER, path,
-                winreg.KEY_ALL_ACCESS | winreg.KEY_WOW64_64KEY)
-            # Delete subkeys first
-            while True:
-                try:
-                    sub = winreg.EnumKey(key, 0)
-                    winreg.DeleteKey(
-                        winreg.HKEY_CURRENT_USER,
-                        f"{path}\\{sub}")
-                except OSError:
-                    break
-            winreg.CloseKey(key)
-            winreg.DeleteKeyEx(
-                winreg.HKEY_CURRENT_USER, path,
-                winreg.KEY_WOW64_64KEY, 0)
-        except (FileNotFoundError, OSError):
-            pass
+        advapi32.RegDeleteTreeW(winreg.HKEY_CURRENT_USER, path)
 
 
 # ---------------------------------------------------------------------------
