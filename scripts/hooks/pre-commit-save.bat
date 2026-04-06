@@ -7,17 +7,21 @@ rem PATH = temp file with newline-delimited list of files to commit
 
 setlocal
 
-set "SVNTS_EXE=C:\Program Files\SvnTimestamp\svnts.exe"
-
-if not exist "%SVNTS_EXE%" (
-    set "SVNTS_EXE=%~dp0svnts.exe"
-)
-
-if not exist "%SVNTS_EXE%" (
-    echo SvnTimestamp not found, skipping pre-commit hook
+rem Try pip-installed svnts command first, then python -m fallback
+where svnts >nul 2>&1
+if %errorLevel% equ 0 (
+    svnts hook-save %1 %2 %3 %4
+    endlocal
     exit /b 0
 )
 
-"%SVNTS_EXE%" hook-save %1 %2 %3 %4
+where python >nul 2>&1
+if %errorLevel% equ 0 (
+    python -m svnts hook-save %1 %2 %3 %4
+    endlocal
+    exit /b 0
+)
 
+echo SvnTimestamp not found, skipping pre-commit hook
 endlocal
+exit /b 0

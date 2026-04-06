@@ -1,31 +1,19 @@
-## Build results
-[Bb]in/
-[Oo]bj/
-[Dd]ebug/
-[Rr]elease/
+## Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
 
-## .NET
-*.user
-*.suo
-*.cache
-*.dll
-*.pdb
-*.exe
-!svnts.exe
-
-## NuGet
-*.nupkg
-packages/
-.nuget/
-
-## Visual Studio
-.vs/
-*.vsidx
-*.suo
-*.user
-*.sln.docstates
+## Virtual environments
+.venv/
+venv/
+env/
 
 ## IDE
+.vs/
 .idea/
 *.swp
 *~
@@ -38,3 +26,4 @@ desktop.ini
 ## Test
 TestResults/
 coverage/
+.pytest_cache/
