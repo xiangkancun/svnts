@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+svnts/__init__.py
+svnts/_install.py
+svnts/cli.py
+svnts/file_time.py
+svnts/manager.py
+svnts/svn_helper.py
+svnts/working_copy.py
+svnts.egg-info/PKG-INFO
+svnts.egg-info/SOURCES.txt
+svnts.egg-info/dependency_links.txt
+svnts.egg-info/entry_points.txt
+svnts.egg-info/top_level.txt
+tests/test_file_time.py
+tests/test_manager.py
+tests/test_working_copy.py

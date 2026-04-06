@@ -1,0 +1,2 @@
+[console_scripts]
+svnts = svnts.cli:main

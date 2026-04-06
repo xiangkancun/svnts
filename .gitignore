@@ -1,29 +1,3 @@
-## Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-dist/
-build/
-*.egg
-
-## Virtual environments
-.venv/
-venv/
-env/
-
-## IDE
-.vs/
-.idea/
-*.swp
-*~
-
-## OS
-Thumbs.db
-.DS_Store
-desktop.ini
-
-## Test
-TestResults/
-coverage/
+*.pyc
 .pytest_cache/
