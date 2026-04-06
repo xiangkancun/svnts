@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 CTIME_PROP = "svnts:ctime"
 MTIME_PROP = "svnts:mtime"
-ISO8601_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
+TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S"
 SVN_EXE = "svn"
 HOOKS_REG = r"Software\TortoiseSVN"
 
@@ -74,12 +74,12 @@ def _dt_to_ft(dt):
     return ft
 
 
-def to_iso8601(dt):
-    return dt.astimezone(timezone.utc).strftime(ISO8601_FMT)
+def to_timestamp_str(dt):
+    return dt.astimezone().strftime(TIMESTAMP_FMT)
 
 
-def from_iso8601(s):
-    return datetime.strptime(s, ISO8601_FMT).replace(tzinfo=timezone.utc)
+def from_timestamp_str(s):
+    return datetime.strptime(s, TIMESTAMP_FMT).astimezone(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +135,8 @@ def save_timestamps(path, log=None):
         return False, "Not in SVN working copy"
     try:
         ct, mt = get_file_times(path)
-        _svn_propset(path, CTIME_PROP, to_iso8601(ct))
-        _svn_propset(path, MTIME_PROP, to_iso8601(mt))
+        _svn_propset(path, CTIME_PROP, to_timestamp_str(ct))
+        _svn_propset(path, MTIME_PROP, to_timestamp_str(mt))
         if log:
             log(f"Saved: {path}")
         return True, None
@@ -153,8 +153,8 @@ def restore_timestamps(path, log=None):
     if not ct_s and not mt_s:
         return False, "No timestamp properties found"
     try:
-        ct = from_iso8601(ct_s) if ct_s else datetime.now(timezone.utc)
-        mt = from_iso8601(mt_s) if mt_s else datetime.now(timezone.utc)
+        ct = from_timestamp_str(ct_s) if ct_s else datetime.now(timezone.utc)
+        mt = from_timestamp_str(mt_s) if mt_s else datetime.now(timezone.utc)
         set_file_times(path, ct, mt)
         if log:
             log(f"Restored: {path}")
