@@ -184,30 +184,22 @@ def save_timestamps(path, log=None):
         ct, mt = get_file_times(path)
         _svn_propset(path, CTIME_PROP, to_timestamp_str(ct))
         _svn_propset(path, MTIME_PROP, to_timestamp_str(mt))
-        if log:
-            log(f"Saved: {path}")
         return True, None
     except Exception as e:
         return False, str(e)
 
 
-def restore_timestamps(path, log=None):
-    """Restore file ctime/mtime from SVN properties."""
-    if not os.path.isfile(path):
-        return False, "File does not exist"
-    ct_s = _svn_propget(path, CTIME_PROP)
-    mt_s = _svn_propget(path, MTIME_PROP)
+def _restore_file(path, ct_s, mt_s):
+    """Restore a single file from already-fetched property values."""
     if not ct_s and not mt_s:
-        return False, "No timestamp properties found"
+        return None  # no props, skip silently
     try:
         ct = from_timestamp_str(ct_s) if ct_s else datetime.now(timezone.utc)
         mt = from_timestamp_str(mt_s) if mt_s else datetime.now(timezone.utc)
         set_file_times(path, ct, mt)
-        if log:
-            log(f"Restored: {path}")
-        return True, None
-    except Exception as e:
-        return False, str(e)
+        return True
+    except Exception:
+        return False
 
 
 def _collect_files(paths):
@@ -227,26 +219,18 @@ def _collect_files(paths):
     return files
 
 
-def _restore_file(path, ct_s, mt_s, log=None):
-    """Restore a single file from already-fetched property values."""
-    if not ct_s and not mt_s:
-        return None  # no props, skip silently
-    try:
-        ct = from_timestamp_str(ct_s) if ct_s else datetime.now(timezone.utc)
-        mt = from_timestamp_str(mt_s) if mt_s else datetime.now(timezone.utc)
-        set_file_times(path, ct, mt)
-        if log:
-            log(f"Restored: {path}")
-        return True
-    except Exception:
-        return False
+def _progress_bar(current, total, width=30):
+    pct = current / total if total else 0
+    filled = int(width * pct)
+    bar = "\u2588" * filled + "\u2591" * (width - filled)
+    print(f"\r  [{bar}] {current}/{total}", end="", flush=True)
 
 
 def process_paths(paths, save, log=None, workers=4):
     """Process files/directories. Returns (ok, fail).
 
     Save: parallel svn propset per file.
-    Restore: batch svn propget (2 calls total), then parallel set_file_times.
+    Restore: batch svn propget (2 calls total), then set_file_times.
     """
     files = _collect_files(paths)
     if not files:
@@ -255,37 +239,44 @@ def process_paths(paths, save, log=None, workers=4):
     files = [f for f in files if is_in_wc(f)]
     if not files:
         return 0, 0
+    total = len(files)
 
     if save:
-        fn = save_timestamps
-        ok = fail = 0
+        ok = fail = done = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(fn, f): f for f in files}
+            futures = {pool.submit(save_timestamps, f): f for f in files}
             for future in as_completed(futures):
                 s, _ = future.result()
+                done += 1
                 ok += s
                 fail += not s
+                if log:
+                    _progress_bar(done, total)
     else:
-        # Batch propget: only 2 svn calls regardless of file count
+        if log:
+            print("  Reading properties...", flush=True)
         ct_map = _svn_propget_batch(files, CTIME_PROP)
         mt_map = _svn_propget_batch(files, MTIME_PROP)
         ok = fail = skip = 0
-        for f in files:
-            s = _restore_file(f, ct_map.get(f), mt_map.get(f), log)
+        for i, f in enumerate(files):
+            s = _restore_file(f, ct_map.get(f), mt_map.get(f))
             if s is None:
                 skip += 1
             else:
                 ok += s
                 fail += not s
+            if log:
+                _progress_bar(i + 1, total)
 
     if log:
+        print()
         action = "saved" if save else "restored"
         msg = f"Done: {ok} {action}"
         if fail:
             msg += f", {fail} failed"
-        if skip:
+        if not save and skip:
             msg += f", {skip} skipped (no props)"
-        print(msg)
+        print(f"  {msg}")
     return ok, fail
 
 
