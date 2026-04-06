@@ -249,10 +249,11 @@ def _reg_add(key_path, value_name, value):
         full += "\\command"
         value_name = None
     parts = full.split("\\")
-    key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, parts[0])
+    access = winreg.KEY_ALL_ACCESS | winreg.KEY_WOW64_64KEY
+    key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, parts[0], 0, access)
     for p in parts[1:-1]:
-        key = winreg.CreateKey(key, p)
-    sub = winreg.CreateKey(key, parts[-1])
+        key = winreg.CreateKeyEx(key, p, 0, access)
+    sub = winreg.CreateKeyEx(key, parts[-1], 0, access)
     winreg.SetValueEx(sub, value_name, 0, winreg.REG_SZ, value)
     winreg.CloseKey(sub)
     winreg.CloseKey(key)
