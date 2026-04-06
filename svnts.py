@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import winreg
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
@@ -110,18 +111,37 @@ def _svn_propset(path, prop, value):
 # ---------------------------------------------------------------------------
 # Working copy detection
 # ---------------------------------------------------------------------------
-def is_in_wc(path):
+_wc_root_cache = {}
+
+
+def find_wc_root(path):
+    """Find SVN working copy root for path, with caching."""
     d = os.path.realpath(path)
     if os.path.isfile(d):
         d = os.path.dirname(d)
+    # Check cache: find longest cached prefix that matches
+    best = None
+    for cached_dir, cached_root in _wc_root_cache.items():
+        if d.lower().startswith(cached_dir.lower()):
+            if best is None or len(cached_dir) > len(best[0]):
+                best = (cached_dir, cached_root)
+    if best:
+        return best[1]
+    # Walk up to find .svn
+    original = d
     while d:
         if os.path.isdir(os.path.join(d, ".svn")):
-            return True
+            _wc_root_cache[original] = d
+            return d
         parent = os.path.dirname(d)
         if parent == d:
             break
         d = parent
-    return False
+    return None
+
+
+def is_in_wc(path):
+    return find_wc_root(path) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -163,27 +183,39 @@ def restore_timestamps(path, log=None):
         return False, str(e)
 
 
-def process_paths(paths, save, log=None):
-    """Process files/directories. Returns (ok, fail)."""
-    ok = fail = 0
+def _collect_files(paths):
+    """Collect all file paths from given paths/directories."""
+    files = []
     for p in paths:
         p = p.strip()
         if not p:
             continue
         if os.path.isfile(p):
-            s, _ = (save_timestamps if save else restore_timestamps)(p, log)
+            files.append(p)
+        elif os.path.isdir(p):
+            for root, dirs, filenames in os.walk(p):
+                dirs[:] = [d for d in dirs if d != ".svn"]
+                for f in filenames:
+                    files.append(os.path.join(root, f))
+    return files
+
+
+def process_paths(paths, save, log=None, workers=8):
+    """Process files/directories in parallel. Returns (ok, fail)."""
+    files = _collect_files(paths)
+    if not files:
+        return 0, 0
+    fn = save_timestamps if save else restore_timestamps
+    ok = fail = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(fn, f): f for f in files}
+        for future in as_completed(futures):
+            s, _ = future.result()
             ok += s
             fail += not s
-        elif os.path.isdir(p):
-            for root, dirs, files in os.walk(p):
-                dirs[:] = [d for d in dirs if d != ".svn"]
-                for f in files:
-                    fp = os.path.join(root, f)
-                    s, _ = (save_timestamps if save else restore_timestamps)(fp, log)
-                    ok += s
-                    fail += not s
-        else:
-            fail += 1
+    if log:
+        action = "saved" if save else "restored"
+        log(f"Done: {ok} {action}, {fail} failed.")
     return ok, fail
 
 
@@ -202,7 +234,6 @@ def cmd_save(args):
     if not args:
         print("Usage: svnts.py save <path> [path2 ...]"); return 1
     ok, fail = process_paths(args, True, log=print)
-    print(f"Done: {ok} saved, {fail} failed.")
     return 1 if fail else 0
 
 
@@ -210,7 +241,6 @@ def cmd_restore(args):
     if not args:
         print("Usage: svnts.py restore <path> [path2 ...]"); return 1
     ok, fail = process_paths(args, False, log=print)
-    print(f"Done: {ok} restored, {fail} failed.")
     return 1 if fail else 0
 
 
