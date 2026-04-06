@@ -230,7 +230,7 @@ def _collect_files(paths):
 def _restore_file(path, ct_s, mt_s, log=None):
     """Restore a single file from already-fetched property values."""
     if not ct_s and not mt_s:
-        return False
+        return None  # no props, skip silently
     try:
         ct = from_timestamp_str(ct_s) if ct_s else datetime.now(timezone.utc)
         mt = from_timestamp_str(mt_s) if mt_s else datetime.now(timezone.utc)
@@ -269,15 +269,23 @@ def process_paths(paths, save, log=None, workers=4):
         # Batch propget: only 2 svn calls regardless of file count
         ct_map = _svn_propget_batch(files, CTIME_PROP)
         mt_map = _svn_propget_batch(files, MTIME_PROP)
-        ok = fail = 0
+        ok = fail = skip = 0
         for f in files:
             s = _restore_file(f, ct_map.get(f), mt_map.get(f), log)
-            ok += s
-            fail += not s
+            if s is None:
+                skip += 1
+            else:
+                ok += s
+                fail += not s
 
     if log:
         action = "saved" if save else "restored"
-        log(f"Done: {ok} {action}, {fail} failed.")
+        msg = f"Done: {ok} {action}"
+        if fail:
+            msg += f", {fail} failed"
+        if skip:
+            msg += f", {skip} skipped (no props)"
+        print(msg)
     return ok, fail
 
 
