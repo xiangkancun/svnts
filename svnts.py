@@ -425,9 +425,14 @@ def cmd_restore(args):
 
 
 def cmd_hook_save(args):
-    if not args or not os.path.isfile(args[0]):
+    # pre_commit_hook params: PATH DEPTH MESSAGEFILE ERROR MERGEPROPFILE RESULTPATH
+    # RESULTPATH is at args[5], contains list of files to be committed
+    if len(args) < 6:
         return 0
-    paths = _read_path_file(args[0])
+    result_file = args[5]
+    if not os.path.isfile(result_file):
+        return 0
+    paths = _read_path_file(result_file)
     if not paths:
         return 0
     ok, _ = process_paths(paths, True, log=print)
@@ -436,13 +441,15 @@ def cmd_hook_save(args):
 
 
 def cmd_hook_restore(args):
-    result_file = args[5] if len(args) >= 6 else (args[0] if args else None)
-    if not result_file or not os.path.isfile(result_file):
+    # post_update_hook params: PATH DEPTH REVISION ERROR MERGEPROPFILE
+    # No file list available — use PATH (args[0]) as working copy root,
+    # recursively restore all files that have timestamp properties.
+    if not args:
         return 0
-    paths = _read_path_file(result_file)
-    if not paths:
+    wc_path = args[0]
+    if not wc_path or not os.path.isdir(wc_path):
         return 0
-    ok, _ = process_paths(paths, False, log=print)
+    ok, _ = process_paths([wc_path], False, log=print)
     print(f"Post-update: restored {ok} files")
     return 0
 
