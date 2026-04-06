@@ -4,15 +4,6 @@ echo   SvnTimestamp Installer
 echo ============================================
 echo.
 
-rem Check for admin privileges
-net session >nul 2>&1
-if %errorLevel% neq 0 (
-    echo ERROR: Administrator privileges required.
-    echo Please right-click and select "Run as administrator".
-    pause
-    exit /b 1
-)
-
 set "ROOT_DIR=%~dp0"
 
 rem Install Python package

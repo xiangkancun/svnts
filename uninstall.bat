@@ -4,15 +4,6 @@ echo   SvnTimestamp Uninstaller
 echo ============================================
 echo.
 
-rem Check for admin privileges
-net session >nul 2>&1
-if %errorLevel% neq 0 (
-    echo ERROR: Administrator privileges required.
-    echo Please right-click and select "Run as administrator".
-    pause
-    exit /b 1
-)
-
 echo [1/3] Removing context menu entries...
 reg delete "HKCR\*\shell\SvnTimestampSave" /f >nul 2>&1
 reg delete "HKCR\*\shell\SvnTimestampRestore" /f >nul 2>&1
