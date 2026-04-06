@@ -4,32 +4,23 @@ echo   SvnTimestamp Uninstaller
 echo ============================================
 echo.
 
+set "ROOT_DIR=%~dp0"
+
 echo [1/3] Removing context menu entries...
-reg delete "HKCR\*\shell\SvnTimestampSave" /f >nul 2>&1
-reg delete "HKCR\*\shell\SvnTimestampRestore" /f >nul 2>&1
-reg delete "HKCR\Directory\shell\SvnTimestampSave" /f >nul 2>&1
-reg delete "HKCR\Directory\shell\SvnTimestampRestore" /f >nul 2>&1
+python "%ROOT_DIR%svnts\_install.py" uninstall-menu
 echo        Done.
 
-echo [2/3] Uninstalling svnts Python package...
-pip uninstall svnts -y >nul 2>&1
-if %errorLevel% equ 0 (
-    echo        Done.
-) else (
-    echo        svnts package not found, skipped.
-)
+echo [2/3] Removing TortoiseSVN hooks...
+python "%ROOT_DIR%svnts\_install.py" uninstall-hooks
+echo        Done.
 
-echo [3/3] Cleaning pip cache...
-pip cache remove svnts >nul 2>&1
+echo [3/3] Uninstalling svnts Python package...
+pip uninstall svnts -y >nul 2>&1
 echo        Done.
 
 echo.
 echo ============================================
 echo   Uninstallation complete!
 echo ============================================
-echo.
-echo NOTE: TortoiseSVN hook scripts were NOT removed automatically.
-echo        If you configured hooks, please remove them manually:
-echo        TortoiseSVN ^> Settings ^> Hook Scripts ^> select and Remove
 echo.
 pause
