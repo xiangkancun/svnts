@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "svnts"
+version = "1.0.0"
+description = "Save/Restore file ctime/mtime via SVN properties"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+
+[project.scripts]
+svnts = "svnts.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["svnts*"]
