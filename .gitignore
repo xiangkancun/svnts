@@ -1,0 +1,40 @@
+## Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+
+## .NET
+*.user
+*.suo
+*.cache
+*.dll
+*.pdb
+*.exe
+!svnts.exe
+
+## NuGet
+*.nupkg
+packages/
+.nuget/
+
+## Visual Studio
+.vs/
+*.vsidx
+*.suo
+*.user
+*.sln.docstates
+
+## IDE
+.idea/
+*.swp
+*~
+
+## OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+## Test
+TestResults/
+coverage/
