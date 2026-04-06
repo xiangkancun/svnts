@@ -297,8 +297,12 @@ _CONTEXT_PREFIXES = [
 ]
 
 
-def _add_context_menu(name, display_text, command, icon_path=None):
+def _add_context_menu(name, display_text, command, icon_path=None,
+                      bg_command=None):
+    """Register context menu. bg_command is used for Directory\\Background."""
     for prefix in _CONTEXT_PREFIXES:
+        is_bg = "Background" in prefix
+        cmd = bg_command if is_bg and bg_command else command
         key = winreg.CreateKeyEx(
             winreg.HKEY_CURRENT_USER, f"{prefix}\\{name}", 0, winreg.KEY_WRITE)
         winreg.SetValueEx(key, None, 0, winreg.REG_SZ, display_text)
@@ -308,7 +312,7 @@ def _add_context_menu(name, display_text, command, icon_path=None):
         cmd_key = winreg.CreateKeyEx(
             winreg.HKEY_CURRENT_USER,
             f"{prefix}\\{name}\\command", 0, winreg.KEY_WRITE)
-        winreg.SetValueEx(cmd_key, None, 0, winreg.REG_SZ, command)
+        winreg.SetValueEx(cmd_key, None, 0, winreg.REG_SZ, cmd)
         winreg.CloseKey(cmd_key)
 
 
@@ -348,10 +352,12 @@ def cmd_install(_args):
     tsvn_icon = r"C:\Program Files\TortoiseSVN\bin\TortoiseProc.exe"
     _add_context_menu(
         "SvnTimestampsSave", "SVN: 保存时间戳 (ctime/mtime)",
-        f'"{exe}" "{script}" save "%1"', tsvn_icon)
+        f'"{exe}" "{script}" save "%1"', tsvn_icon,
+        bg_command=f'"{exe}" "{script}" save "%V"')
     _add_context_menu(
         "SvnTimestampsRestore", "SVN: 恢复时间戳 (ctime/mtime)",
-        f'"{exe}" "{script}" restore "%1"', tsvn_icon)
+        f'"{exe}" "{script}" restore "%1"', tsvn_icon,
+        bg_command=f'"{exe}" "{script}" restore "%V"')
     print("       Done.")
 
     # TortoiseSVN hooks
