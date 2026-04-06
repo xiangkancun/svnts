@@ -226,7 +226,9 @@ def _wc_db_path(file_path):
 
 def _relpath(file_path, wc_root):
     """Relative path from WC root, using forward slashes (SVN convention)."""
-    return os.path.relpath(file_path, wc_root).replace("\\", "/")
+    # Use realpath for both to handle drive-letter vs UNC differences
+    return os.path.relpath(os.path.realpath(file_path),
+                           os.path.realpath(wc_root)).replace("\\", "/")
 
 
 # ---------------------------------------------------------------------------
