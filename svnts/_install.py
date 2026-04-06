@@ -85,28 +85,20 @@ def _read_hooks() -> list[list[str]]:
     if not value or not value.strip():
         return []
 
-    blocks = []
-    current_block = []
-    for line in value.split("\n"):
-        if line.strip() == "":
-            if current_block:
-                blocks.append(current_block)
-                current_block = []
-        else:
-            current_block.append(line)
-    if current_block:
-        blocks.append(current_block)
-    return blocks
+    lines = [l for l in value.split("\n") if l.strip()]
+    return [lines[i:i+6] for i in range(0, len(lines), 6)]
 
 
 def _write_hooks(blocks: list[list[str]]) -> None:
-    """Write TortoiseSVN hooks to registry."""
-    lines = []
-    for i, block in enumerate(blocks):
-        if i > 0:
-            lines.append("")  # blank line between blocks
-        lines.extend(block)
-    value = "\n".join(lines)
+    """Write TortoiseSVN hooks to registry.
+
+    Format: each hook is exactly 6 lines, blocks are concatenated
+    without any separator (no blank lines).
+    """
+    all_lines = []
+    for block in blocks:
+        all_lines.extend(block)
+    value = "\n".join(all_lines)
 
     key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_TORTOISE, 0, winreg.KEY_SET_VALUE)
     if value:
